@@ -1,0 +1,18 @@
+<mat-toolbar color="primary">
+  <a mat-button routerLink="/">Polls</a>
+  <a mat-button routerLink="/polls2">Polls 2</a>
+  <div class="spacer"></div>
+
+  <ng-container *ngIf="authenticationService.connectedUser | async as user; else anonymous">
+    <span>Hello {{user.name}}</span>
+    <button mat-button (click)="authenticationService.logout()">Logout</button>
+  </ng-container>
+
+  <ng-template #anonymous>
+    <a mat-button routerLink="/login">Login</a>
+  </ng-template>
+  <a mat-button *appIsAnonymous routerLink="/signup">Sign up</a>
+
+</mat-toolbar>
+
+<router-outlet></router-outlet>

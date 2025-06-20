@@ -1,0 +1,150 @@
+pipeline {
+    agent none
+    stages {
+        stage('Build and tests') {
+            parallel {
+                stage('Backend') {
+                    agent {
+                        docker {
+                            image 'maven:3.9.6'
+                            args '-v /root/.m2:/root/.m2'
+                            args '-u root'
+                        }
+                    }
+                    stages {
+                        stage('Build') {
+                            steps {
+                                dir('poll-backend') {
+                                    sh 'mvn clean package -DskipTests --batch-mode'
+                                    archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
+                                }
+                            }
+                        }
+                        stage('Test') {
+                            steps {
+                                dir('poll-backend') {
+                                    sh 'mvn surefire:test --batch-mode'
+                                    junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+                                }
+                            }
+                        }
+                    }
+                }
+                stage('Frontend') {
+                    stages {
+                        stage('Build') {
+                            agent {
+                                docker {
+                                    image 'node:23'
+                                    args '-u root'
+                                }
+                            }
+                            steps {
+                                dir('poll-frontend-angular') {
+                                    sh 'npm install'
+                                    sh 'npm run build'
+                                    sh 'tar -czvf poll-frontend-angular.tar.gz dist/poll-frontend-angular/browser/*'
+                                    archiveArtifacts artifacts: 'poll-frontend-angular.tar.gz', fingerprint: true
+                                }
+                            }
+                        }
+                        stage('Test') {
+                            agent {
+                                docker {
+                                    image 'trion/ng-cli-karma:16.1.0'
+                                    args '-u root'
+                                }
+                            }
+                            steps {
+                                dir('poll-frontend-angular') {
+                                    sh 'npm install'
+                                    catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                                        sh 'npm run test-jenkins'
+                                    }
+                                    junit allowEmptyResults: true, testResults: 'reports/**/*.xml'
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage("Sonarqube analysis") {
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli:latest'
+                    args '-u root --network host'
+                }
+            }
+            steps {
+                dir('poll-backend') {
+                    withSonarQubeEnv('sonarqube') {
+                        sh 'sonar-scanner'
+                    }
+                }
+                dir('poll-frontend-angular') {
+                    withSonarQubeEnv('sonarqube') {
+                        sh 'sonar-scanner'
+                    }
+                }
+            }
+        }
+        // stage("Sonarqube Quality Gate") {
+        //     agent any
+        //     steps {
+        //         timeout(time: 1, unit: 'HOURS') {
+        //             waitForQualityGate abortPipeline: true
+        //         }
+        //     }
+        // }
+        stage("Building images") {
+            parallel{
+                stage('Backend') {
+                    agent any
+                    steps {
+                        dir('poll-backend') {
+                            sh 'docker build -t nexus:8082/poll-backend:latest -f Dockerfile-jenkins .'
+                        }
+                    }
+                }
+                stage('Frontend') {
+                    agent any
+                    steps {
+                        dir('poll-frontend-angular') {
+                            sh 'docker build -t nexus:8082/poll-frontend-angular:latest -f Dockerfile-jenkins .'
+                        }
+                    }
+                }
+            }
+        }
+        stage("nexus")
+        {
+            agent any
+            environment {
+                NEXUS_CREDENTIALS = credentials('nexus')
+            }
+            steps {
+                script {
+                    sh 'docker login -u ${NEXUS_CREDENTIALS_USR} -p ${NEXUS_CREDENTIALS_PSW} nexus:8082'
+                    sh 'docker push nexus:8082/poll-backend:latest'
+                    sh 'docker push nexus:8082/poll-frontend-angular:latest'
+                    sh 'docker logout nexus:8082'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            echo 'This will always run'
+        }
+        success {
+            echo 'This will run if the build succeeds'
+            updateGitlabCommitStatus name: 'jenkins', state: 'success', message: 'Build successful'
+        }
+        failure {
+            echo 'This will run if the build fails'
+            updateGitlabCommitStatus name: 'jenkins', state: 'failed', message: 'Build failed'
+        }
+        
+    }
+}

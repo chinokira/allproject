@@ -1,0 +1,23 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ prod ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSHPASS: ${{ secrets.APP_PASS }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSHPASS
+        run:
+          sudo apt update && sudo apt install sshpass
+
+      - name: deploy
+        run:
+          sshpass -e ssh -o stricthostkeychecking=no ${{ secrets.APP_USER }}@${{ secrets.APP_HOST }}
+          "cd httpdocs/ && git pull origin prod"
